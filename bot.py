@@ -3,17 +3,14 @@ import logging
 import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from groq import Groq
 from fastapi import FastAPI
 import uvicorn
 
-# Setup logging
+# Logging setup
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # Your personal numeric Telegram ID
 
 # --- PRODUCT CATALOG (Naira ₦) ---
 CATALOG = {
@@ -48,14 +45,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         f"👑 *Welcome to BABY BOY, {user.first_name}*.\n\n"
         "_A Royal Essence for Selection & Status._\n\n"
-        "Explore our signature oil collections, craft a custom scent with AI, "
+        "Explore our signature oil collections, request a custom scent blended directly with our admin, "
         "or manage your orders seamlessly.\n\n"
         "Your scent. Your story. Your signature."
     )
     
     keyboard = [
         [InlineKeyboardButton("👑 Shop Collections", callback_data="shop_collections")],
-        [InlineKeyboardButton("🧪 Create Your Own Scent (AI)", callback_data="create_scent")],
+        [InlineKeyboardButton("🧪 Create Custom Scent (Admin)", callback_data="create_custom_scent")],
         [InlineKeyboardButton("🛒 View Cart / Checkout", callback_data="view_cart")],
         [InlineKeyboardButton("📞 Contact Support", callback_data="support")]
     ]
@@ -102,7 +99,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if found_item:
             if user_id not in USER_SESSIONS:
-                USER_SESSIONS[user_id] = {"cart": [], "ai_mode": False}
+                USER_SESSIONS[user_id] = {"cart": [], "custom_mode": False}
             USER_SESSIONS[user_id]["cart"].append(found_item)
             
             keyboard = [
@@ -161,15 +158,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
         await query.edit_message_text(checkout_text, parse_mode="Markdown")
         
-    elif data == "create_scent":
+    elif data == "create_custom_scent":
         if user_id not in USER_SESSIONS:
-            USER_SESSIONS[user_id] = {"cart": [], "ai_mode": False}
-        USER_SESSIONS[user_id]["ai_mode"] = True
+            USER_SESSIONS[user_id] = {"cart": [], "custom_mode": False}
+        USER_SESSIONS[user_id]["custom_mode"] = True
         
         await query.edit_message_text(
-            "🧪 *BABY BOY AI Fragrance Studio*\n\n"
-            "Describe the exact scent you want in your own words (e.g., _'I want a rich, dark woody scent with vanilla sweetness and tobacco notes'_):\n\n"
-            "✍️ *Type your description right here in the chat:*",
+            "🧪 *BABY BOY Custom Fragrance Request*\n\n"
+            "Please describe the exact scent you want in detail (e.g., _'Rich woody scent with sweet vanilla and smoky leather'_).\n\n"
+            "⚠️ **Important:** Kindly include your **Telegram Username** and **Phone Number** in your message so our master curator can contact you directly!\n\n"
+            "✍️ *Type your description & contact info right here in the chat:*",
             parse_mode="Markdown"
         )
         
@@ -185,61 +183,42 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif data == "main_menu":
         if user_id in USER_SESSIONS:
-            USER_SESSIONS[user_id]["ai_mode"] = False
+            USER_SESSIONS[user_id]["custom_mode"] = False
         await start(update, context)
 
-# --- GROQ AI SCENT ENGINE HANDLER ---
+# --- MESSAGE & CUSTOM SCENT ROUTER ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
+    sender = update.effective_user
     
-    if user_id in USER_SESSIONS and USER_SESSIONS[user_id].get("ai_mode"):
-        if not groq_client:
-            await update.message.reply_text("⚠️ AI Studio is offline. GROQ_API_KEY is missing on Render.")
-            return
-            
-        await update.message.reply_text("🧪 *Crafting your custom luxury formula with Groq AI...* Please wait ⏳", parse_mode="Markdown")
+    # Handle custom scent request submission
+    if user_id in USER_SESSIONS and USER_SESSIONS[user_id].get("custom_mode"):
+        USER_SESSIONS[user_id]["custom_mode"] = False
         
-        models_to_try = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
-        ai_recipe = None
-
-        for model in models_to_try:
+        # Forward details to admin DM if ADMIN_CHAT_ID is set
+        if ADMIN_CHAT_ID:
             try:
-                completion = groq_client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are an elite master perfumer for 'BABY BOY', a luxury oil-based fragrance brand. "
-                                "When the user describes a desired scent, create a custom formulation for them. "
-                                "Provide: 1. A sophisticated custom perfume name. "
-                                "2. Top Notes, Heart Notes, and Base Notes. "
-                                "3. A brief, luxurious description of the aura and vibe. Keep it concise, high-end, and punchy."
-                            )
-                        },
-                        {"role": "user", "content": user_text}
-                    ],
-                    temperature=0.7,
-                    max_tokens=400
+                admin_msg = (
+                    f"🧪 *NEW CUSTOM SCENT REQUEST!*\n\n"
+                    f"👤 *From:* {sender.first_name} (@{sender.username or 'No Username'})\n"
+                    f"🆔 *User ID:* `{user_id}`\n\n"
+                    f"📝 *Details & Description:*\n{user_text}"
                 )
-                ai_recipe = completion.choices[0].message.content
-                break
-            except Exception as err:
-                logger.warning(f"Failed model {model}: {err}")
-                continue
-
-        USER_SESSIONS[user_id]["ai_mode"] = False
+                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_msg, parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Failed to forward custom scent to admin: {e}")
         
-        if ai_recipe:
-            response_message = f"✨ *Your Custom BABY BOY Formula Result* ✨\n\n{ai_recipe}\n\n" \
-                               f"To order this custom blend as a pure oil, contact support at @ambIntegrity!"
-            keyboard = [[InlineKeyboardButton("👑 Main Menu", callback_data="main_menu")]]
-            await update.message.reply_text(response_message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-        else:
-            await update.message.reply_text("⚠️ Groq API connection issue. Please verify your `GROQ_API_KEY` inside Render Environment variables.")
-            
+        keyboard = [[InlineKeyboardButton("👑 Return to Main Menu", callback_data="main_menu")]]
+        await update.message.reply_text(
+            "✅ *Custom Scent Request Submitted!*\n\n"
+            "Your description and contact details have been sent directly to our lead curator DM. "
+            "We will review your formulation and get back to you shortly!",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
     else:
+        # Default message/receipt forwarding
         if ADMIN_CHAT_ID:
             try:
                 await context.bot.forward_message(
