@@ -12,7 +12,7 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # Optional: Your personal Telegram numeric ID for admin alerts
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 # --- PRODUCT CATALOG & PRICING (Naira ₦) ---
@@ -94,7 +94,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif data.startswith("add_"):
         item_id = data.replace("add_", "")
-        # Find item across catalog
         found_item = None
         for c in CATALOG.values():
             for i in c["items"]:
@@ -149,11 +148,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏦 *Bank:* Moniepoint / Kuda\n"
             f"📌 *Account Number:* `8140000000`\n"
             f"👤 *Account Name:* BABY BOY Fragrance Co.\n\n"
-            f"After making payment, please **send your payment screenshot / receipt here in the chat**, along with your delivery address and phone number!"
+            f"After making payment, please **send your payment receipt/screenshot here**, along with your delivery address and phone number!"
         )
         
-        # Notify Admin if ADMIN_CHAT_ID is configured
-        if ADMIN_CHAT_ID and groq_client: # or bot instance
+        if ADMIN_CHAT_ID:
             try:
                 await context.bot.send_message(
                     chat_id=ADMIN_CHAT_ID,
@@ -177,12 +175,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
     elif data == "support":
-        await query.edit_message_text(
+        support_text = (
             "📞 *BABY BOY Concierge Support*\n\n"
-            "Need assistance with custom blending, wholesale orders, or tracking? Reach out directly to our lead curator.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Main Menu", callback_data="main_menu")]]),
-            parse_mode="Markdown"
+            "Need assistance with custom blending, wholesale orders, or tracking? Reach out directly to our lead curator:\n\n"
+            "📱 *Phone / WhatsApp:* `+2349099959259`\n"
+            "💬 *Telegram:* @ambIntegrity"
         )
+        keyboard = [[InlineKeyboardButton("⬅️ Main Menu", callback_data="main_menu")]]
+        await query.edit_message_text(support_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
     elif data == "main_menu":
         if user_id in USER_SESSIONS:
@@ -194,17 +194,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_text = update.message.text
     
-    # Check if user is in AI fragrance studio mode
     if user_id in USER_SESSIONS and USER_SESSIONS[user_id].get("ai_mode"):
         if not groq_client:
-            await update.message.reply_text("⚠️ AI Studio is currently offline. Please try again later.")
+            await update.message.reply_text("⚠️ AI Studio is currently offline. Please check your API key configuration.")
             return
             
         await update.message.reply_text("🧪 *Crafting your custom luxury formula with Groq AI...* Please wait ⏳", parse_mode="Markdown")
         
         try:
+            # Using the fast and reliable llama3 model on Groq
             completion = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="llama3-70b-8192",
                 messages=[
                     {
                         "role": "system",
@@ -224,7 +224,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             ai_recipe = completion.choices[0].message.content
             response_message = f"✨ *Your Custom BABY BOY Formula Result* ✨\n\n{ai_recipe}\n\n" \
-                               f"To order this custom blend as a pure oil, contact support with your formula!"
+                               f"To order this custom blend, reach out to support at @ambIntegrity!"
             
             USER_SESSIONS[user_id]["ai_mode"] = False
             keyboard = [[InlineKeyboardButton("👑 Main Menu", callback_data="main_menu")]]
@@ -232,20 +232,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except Exception as e:
             logger.error(f"Groq API Error: {e}")
-            await update.message.reply_text("⚠️ An error occurred while generating your scent. Please try again or return to the main menu.")
+            USER_SESSIONS[user_id]["ai_mode"] = False
+            await update.message.reply_text("⚠️ An error occurred while generating your scent with AI. Please make sure your Groq API key is valid on Render, or return to the main menu.")
     else:
-        # Default message handling (e.g. payment screenshots)
         if ADMIN_CHAT_ID:
-            await context.bot.forward_message(
-                chat_id=ADMIN_CHAT_ID,
-                from_chat_id=update.effective_chat.id,
-                message_id=update.message.message_id
-            )
-            await update.message.reply_text("📥 *Receipt / Message received!* Our admin team will verify your details shortly.", parse_mode="Markdown")
+            try:
+                await context.bot.forward_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=update.message.message_id
+                )
+                await update.message.reply_text("📥 *Receipt / Message received!* Our admin team will verify your details shortly.", parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Forward message error: {e}")
         else:
             await update.message.reply_text("Tap /start to open the BABY BOY main menu.")
 
-# --- FASTAPI WEB SERVER (Health Check for Uptime Robot & Render) ---
+# --- FASTAPI WEB SERVER ---
 app = FastAPI()
 
 @app.api_route("/", methods=["GET", "HEAD", "POST"])
@@ -257,12 +260,10 @@ def run_web_server():
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 if __name__ == "__main__":
-    # Start web server in background thread
     server_thread = threading.Thread(target=run_web_server, daemon=True)
     server_thread.start()
     logger.info("FastAPI Web Server started in background.")
 
-    # Run Telegram Bot on main thread
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         logger.error("No Telegram Bot Token found!")
