@@ -3,13 +3,18 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from groq import Groq
+from fastapi import FastAPI
+import uvicorn
+import threading
 
+# Setup logging
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
+# --- TELEGRAM BOT LOGIC ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     welcome_text = (
@@ -58,7 +63,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "main_menu":
         await start(update, context)
 
-def main():
+def run_telegram_bot():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         logger.error("No Telegram Bot Token found!")
@@ -68,8 +73,24 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    logger.info("Bot is starting...")
+    logger.info("Telegram Bot is polling...")
     application.run_polling()
 
+# --- FASTAPI WEB SERVER (Required for Render Free Web Service) ---
+app = FastAPI()
+
+@app.get("/")
+def home():
+    return {"status": "BABY BOY Bot is alive and running!"}
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
 if __name__ == "__main__":
-    main()
+    # Run Telegram bot in a background thread
+    bot_thread = threading.Thread(target=run_telegram_bot)
+    bot_thread.start()
+    
+    # Run FastAPI web server on the main thread
+    run_web_server()
