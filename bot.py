@@ -1,13 +1,14 @@
 import os
 import logging
+import asyncio
+import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from groq import Groq
 from fastapi import FastAPI
 import uvicorn
-import threading
 
-# Setup logging
+# Logging setup
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -69,28 +70,31 @@ def run_telegram_bot():
         logger.error("No Telegram Bot Token found!")
         return
         
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     application = Application.builder().token(token).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
     
     logger.info("Telegram Bot is polling...")
-    application.run_polling()
+    application.run_polling(drop_pending_updates=True)
 
-# --- FASTAPI WEB SERVER (Required for Render Free Web Service) ---
+# --- FASTAPI WEB SERVER (Fixes HTTP 405 Error) ---
 app = FastAPI()
 
-@app.get("/")
-def home():
-    return {"status": "BABY BOY Bot is alive and running!"}
+@app.api_route("/", methods=["GET", "HEAD", "POST"])
+def health_check():
+    return {"status": "BABY BOY Bot is online"}
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    # Run Telegram bot in a background thread
-    bot_thread = threading.Thread(target=run_telegram_bot)
+    # Start bot thread
+    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
     bot_thread.start()
     
-    # Run FastAPI web server on the main thread
+    # Run web server
     run_web_server()
