@@ -2,3 +2,5 @@ python-telegram-bot
 groq
 python-dotenv
 requests
+fastapi
+uvicorn
