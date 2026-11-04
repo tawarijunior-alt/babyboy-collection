@@ -1,6 +1,5 @@
 import os
 import logging
-import asyncio
 import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -64,23 +63,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "main_menu":
         await start(update, context)
 
-def run_telegram_bot():
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        logger.error("No Telegram Bot Token found!")
-        return
-        
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    
-    application = Application.builder().token(token).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    
-    logger.info("Telegram Bot is polling...")
-    application.run_polling(drop_pending_updates=True)
-
-# --- FASTAPI WEB SERVER (Fixes HTTP 405 Error) ---
+# --- FASTAPI WEB SERVER (Runs in background thread to satisfy Render) ---
 app = FastAPI()
 
 @app.api_route("/", methods=["GET", "HEAD", "POST"])
@@ -89,12 +72,22 @@ def health_check():
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 if __name__ == "__main__":
-    # Start bot thread
-    bot_thread = threading.Thread(target=run_telegram_bot, daemon=True)
-    bot_thread.start()
-    
-    # Run web server
-    run_web_server()
+    # Start FastAPI web server in a background thread so Render's health checks pass
+    server_thread = threading.Thread(target=run_web_server, daemon=True)
+    server_thread.start()
+    logger.info("FastAPI Web Server started in background thread.")
+
+    # Run Telegram Bot on the main thread (satisfies Python signal handlers)
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        logger.error("No Telegram Bot Token found!")
+    else:
+        application = Application.builder().token(token).build()
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CallbackQueryHandler(button_handler))
+        
+        logger.info("Telegram Bot is polling on main thread...")
+        application.run_polling(drop_pending_updates=True)
