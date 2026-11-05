@@ -3,7 +3,6 @@ import logging
 import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from groq import Groq
 from fastapi import FastAPI
 import uvicorn
 
@@ -11,20 +10,10 @@ import uvicorn
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+# Preferred Telegram DM Chat ID for Admin Notifications
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "6375911140")
 
-# --- RAW OILS INVENTORY & CATALOG (Naira ₦) ---
-RAW_OILS_INVENTORY = [
-    {"id": "oil_1", "name": "Oud Royal", "desc": "Deep, woody, rich royal Arabic oud."},
-    {"id": "oil_2", "name": "Bleu de Boss", "desc": "Crisp citrus with amber-woody notes."},
-    {"id": "oil_3", "name": "Vanilla Velvet", "desc": "Smooth warm vanilla and soft musk."},
-    {"id": "oil_4", "name": "Savage Elixir", "desc": "Spicy, raw, magnetic masculine note."},
-    {"id": "oil_5", "name": "Golden Tobacco", "desc": "Warm honeyed tobacco with sweet spices."},
-    {"id": "oil_6", "name": "White Musk", "desc": "Clean, soft, intimate skin-like base."}
-]
-
+# --- PRODUCT CATALOG (Naira ₦) ---
 CATALOG = {
     "col_babyboy": {
         "title": "✨ Baby Boy Collection (Signature Oils)",
@@ -57,14 +46,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
         f"👑 *Welcome to BABY BOY, {user.first_name}*.\n\n"
         "_A Royal Essence for Selection & Status._\n\n"
-        "Explore our signature oil collections, craft a custom scent using our raw inventory oils, "
+        "Explore our signature oil collections, request a custom scent blended directly with our admin, "
         "or manage your orders seamlessly.\n\n"
         "Your scent. Your story. Your signature."
     )
     
     keyboard = [
         [InlineKeyboardButton("👑 Shop Collections", callback_data="shop_collections")],
-        [InlineKeyboardButton("🧪 Create Custom Scent (AI & Inventory)", callback_data="create_custom_scent")],
+        [InlineKeyboardButton("🧪 Create Custom Scent (Admin)", callback_data="create_custom_scent")],
         [InlineKeyboardButton("🛒 View Cart / Checkout", callback_data="view_cart")],
         [InlineKeyboardButton("📞 Contact Support", callback_data="support")]
     ]
@@ -159,10 +148,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         checkout_text = (
             f"💳 *Order Checkout & Payment Verification*\n\n"
             f"Total Amount Due: *₦{total:,}*\n\n"
-            f"Please transfer to our official business account:\n"
-            f"🏦 *Bank:* Moniepoint / Kuda\n"
-            f"📌 *Account Number:* `8140000000`\n"
-            f"👤 *Account Name:* BABY BOY Fragrance Co.\n\n"
+            f"Please transfer to our official account:\n"
+            f"🏦 *Bank:* Opay\n"
+            f"📌 *Account Number:* `9099959259`\n"
+            f"👤 *Account Name:* Clinton Ojeaga\n\n"
             f"📸 **Mandatory Step:** Please **upload your payment receipt screenshot here in the chat**, along with your delivery address and phone number to complete your order!"
         )
         await query.edit_message_text(checkout_text, parse_mode="Markdown")
@@ -172,20 +161,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             USER_SESSIONS[user_id] = {"cart": [], "custom_mode": False, "checkout_mode": False}
         USER_SESSIONS[user_id]["custom_mode"] = True
         
-        # List available inventory oils to the user
-        inventory_list = "\n".join([f"▪️ *{oil['name']}* — _{oil['desc']}_" for oil in RAW_OILS_INVENTORY])
-        
-        prompt_text = (
-            f"🧪 *BABY BOY Custom Fragrance Studio*\n\n"
-            f"We use our exclusive raw stock oils to blend your custom bottle.\n\n"
-            f"📦 *Available Raw Oils in Inventory:*\n{inventory_list}\n\n"
-            f"Please reply with:\n"
-            f"1️⃣ **Desired Bottle Size** (e.g., 6ml, 12ml, 50ml)\n"
-            f"2️⃣ **Your Preferred Scent Profile / Vibe**\n"
-            f"3️⃣ **Your Telegram Username & Phone Number**\n\n"
-            f"✍️ *Type your request right here in the chat:*"
+        await query.edit_message_text(
+            "🧪 *BABY BOY Custom Fragrance Request*\n\n"
+            "Please describe the exact scent you want in detail (e.g., _'Rich woody scent with sweet vanilla and smoky leather'_).\n\n"
+            "⚠️ **Important:** Kindly include your **Telegram Username** and **Phone Number** in your message so our master curator can contact you directly!\n\n"
+            "✍️ *Type your description & contact info right here in the chat:*",
+            parse_mode="Markdown"
         )
-        await query.edit_message_text(prompt_text, parse_mode="Markdown")
         
     elif data == "support":
         support_text = (
@@ -203,70 +185,35 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             USER_SESSIONS[user_id]["checkout_mode"] = False
         await start(update, context)
 
-# --- MESSAGE ROUTER (AI Mixing Formula & Receipts) ---
+# --- MESSAGE ROUTER ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     sender = update.effective_user
     session = USER_SESSIONS.get(user_id, {})
-    user_text = update.message.text or "Media / Receipt Attached"
     
-    # 1. Custom Scent & AI Inventory Mixing Handler
+    # 1. Custom Scent Request Handler
     if session.get("custom_mode"):
         session["custom_mode"] = False
+        user_text = update.message.text or "Media provided"
         
-        await update.message.reply_text("🧪 *Calculating precise raw oil measurements and mixing steps with AI...* Please wait ⏳", parse_mode="Markdown")
-        
-        # Build inventory list string for the AI prompt
-        inventory_string = "\n".join([f"- {oil['name']}: {oil['desc']}" for oil in RAW_OILS_INVENTORY])
-        
-        ai_formula = None
-        if groq_client:
-            try:
-                completion = groq_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are an elite master perfumer for 'BABY BOY'. "
-                                "The user wants a custom fragrance blend. You MUST create the formula using ONLY the following raw oils from our inventory:\n"
-                                f"{inventory_string}\n\n"
-                                "Provide: 1. A custom luxury perfume name. "
-                                "2. Exact measurements/drops or milliliters (ml) for the requested bottle size. "
-                                "3. Step-by-step mixing instructions for the admin to blend it."
-                            )
-                        },
-                        {"role": "user", "content": user_text}
-                    ],
-                    temperature=0.7,
-                    max_tokens=500
-                )
-                ai_formula = completion.choices[0].message.content
-            except Exception as e:
-                logger.error(f"Groq AI formulation error: {e}")
-                ai_formula = "AI generation temporarily unavailable. Custom request logged for manual admin review."
-
-        # Forward custom request & AI formula to Admin DM
         if ADMIN_CHAT_ID:
             try:
                 admin_msg = (
-                    f"🧪 *NEW CUSTOM SCENT FORMULATION REQUEST!*\n\n"
-                    f"👤 *Customer:* {sender.first_name} (@{sender.username or 'No Username'})\n"
+                    f"🧪 *NEW CUSTOM SCENT REQUEST!*\n\n"
+                    f"👤 *From:* {sender.first_name} (@{sender.username or 'No Username'})\n"
                     f"🆔 *User ID:* `{user_id}`\n\n"
-                    f"📝 *Customer Request:*\n{user_text}\n\n"
-                    f"⚖️ *AI Calculated Mixing Formula:*\n{ai_formula}"
+                    f"📝 *Details:*\n{user_text}"
                 )
                 await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_msg, parse_mode="Markdown")
             except Exception as e:
                 logger.error(f"Admin custom scent forward error: {e}")
         
-        # Reply to Customer
-        response_text = (
-            f"✨ *Your Custom Formula Has Been Generated!* ✨\n\n{ai_formula}\n\n"
-            "Your custom request and mixing details have been sent straight to our master curator. We will contact you shortly to finalize your order!"
-        )
         keyboard = [[InlineKeyboardButton("👑 Return to Main Menu", callback_data="main_menu")]]
-        await update.message.reply_text(response_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.message.reply_text(
+            "✅ *Custom Scent Request Submitted!*\n\nSent directly to our admin team. We will review and contact you shortly!",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
         return
 
     # 2. Checkout Receipt Upload Handler
