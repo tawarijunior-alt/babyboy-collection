@@ -10,7 +10,7 @@ import uvicorn
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # Your personal numeric Telegram ID
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
 # --- PRODUCT CATALOG (Naira ₦) ---
 CATALOG = {
@@ -82,11 +82,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif data in CATALOG:
         col = CATALOG[data]
+        text = f"*{col['title']}*\n\n"
         keyboard = []
         for item in col["items"]:
-            keyboard.append([InlineKeyboardButton(f"{item['name']} - ₦{item['price']:,}", callback_data=f"add_{item['id']}")])
-        keyboard.append([InlineKeyboardButton("⬅️ Back to Collections", callback_data="shop_collections")])
-        await query.edit_message_text(f"*{col['title']}*\n\nTap any fragrance to add it to your cart:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            text += f"▪️ *{item['name']}* - ₦{item['price']:,}\n_{item['desc']}_\n\n"
+            keyboard.append([InlineKeyboardButton(f"➕ Add {item['name']} (₦{item['price']:,})", callback_data=f"add_{item['id']}")])
+        keyboard.append([InlineKeyboardButton("🛒 View Cart", callback_data="view_cart"), InlineKeyboardButton("⬅️ Collections", callback_data="shop_collections")])
+        
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
     elif data.startswith("add_"):
         item_id = data.replace("add_", "")
@@ -99,7 +102,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if found_item:
             if user_id not in USER_SESSIONS:
-                USER_SESSIONS[user_id] = {"cart": [], "custom_mode": False}
+                USER_SESSIONS[user_id] = {"cart": [], "custom_mode": False, "checkout_mode": False}
             USER_SESSIONS[user_id]["cart"].append(found_item)
             
             keyboard = [
@@ -122,7 +125,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"\n*Total: ₦{total:,}*\n\nReady to place your order?"
         
         keyboard = [
-            [InlineKeyboardButton("💳 Complete Order (Bank Transfer)", callback_data="checkout_order")],
+            [InlineKeyboardButton("💳 Proceed to Payment & Receipt Upload", callback_data="checkout_order")],
             [InlineKeyboardButton("🗑️ Clear Cart", callback_data="clear_cart")],
             [InlineKeyboardButton("⬅️ Main Menu", callback_data="main_menu")]
         ]
@@ -134,40 +137,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🛒 Your cart has been cleared.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Main Menu", callback_data="main_menu")]]))
         
     elif data == "checkout_order":
-        cart = USER_SESSIONS.get(user_id, {}).get("cart", [])
+        if user_id not in USER_SESSIONS:
+            USER_SESSIONS[user_id] = {}
+        USER_SESSIONS[user_id]["checkout_mode"] = True
+        
+        cart = USER_SESSIONS[user_id].get("cart", [])
         total = sum(item["price"] for item in cart)
         
         checkout_text = (
-            f"💳 *Order Checkout & Payment*\n\n"
+            f"💳 *Order Checkout & Payment Verification*\n\n"
             f"Total Amount Due: *₦{total:,}*\n\n"
             f"Please transfer to our official business account:\n"
             f"🏦 *Bank:* Moniepoint / Kuda\n"
             f"📌 *Account Number:* `8140000000`\n"
             f"👤 *Account Name:* BABY BOY Fragrance Co.\n\n"
-            f"After making payment, please **send your payment receipt/screenshot here in the chat**, along with your delivery address and phone number!"
+            f"📸 **Mandatory Step:** Please **upload your payment receipt screenshot here in the chat**, along with your delivery address and phone number to complete your order!"
         )
-        
-        if ADMIN_CHAT_ID:
-            try:
-                await context.bot.send_message(
-                    chat_id=ADMIN_CHAT_ID,
-                    text=f"🚨 *New Checkout Started!*\nUser: @{query.from_user.username or query.from_user.first_name}\nTotal: ₦{total:,}"
-                )
-            except Exception as e:
-                logger.error(f"Failed to send admin notification: {e}")
-                
         await query.edit_message_text(checkout_text, parse_mode="Markdown")
         
     elif data == "create_custom_scent":
         if user_id not in USER_SESSIONS:
-            USER_SESSIONS[user_id] = {"cart": [], "custom_mode": False}
+            USER_SESSIONS[user_id] = {"cart": [], "custom_mode": False, "checkout_mode": False}
         USER_SESSIONS[user_id]["custom_mode"] = True
         
         await query.edit_message_text(
             "🧪 *BABY BOY Custom Fragrance Request*\n\n"
             "Please describe the exact scent you want in detail (e.g., _'Rich woody scent with sweet vanilla and smoky leather'_).\n\n"
-            "⚠️ **Important:** Kindly include your **Telegram Username** and **Phone Number** in your message so our master curator can contact you directly!\n\n"
-            "✍️ *Type your description & contact info right here in the chat:*",
+            "⚠️ *Kindly include your Telegram Username and Phone Number in your message!*:\n\n"
+            "✍️ *Type your description right here in the chat:*",
             parse_mode="Markdown"
         )
         
@@ -184,53 +181,94 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "main_menu":
         if user_id in USER_SESSIONS:
             USER_SESSIONS[user_id]["custom_mode"] = False
+            USER_SESSIONS[user_id]["checkout_mode"] = False
         await start(update, context)
 
-# --- MESSAGE & CUSTOM SCENT ROUTER ---
+# --- MESSAGE ROUTER (Receipts & Custom Scents) ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_text = update.message.text
     sender = update.effective_user
+    session = USER_SESSIONS.get(user_id, {})
     
-    # Handle custom scent request submission
-    if user_id in USER_SESSIONS and USER_SESSIONS[user_id].get("custom_mode"):
-        USER_SESSIONS[user_id]["custom_mode"] = False
+    # 1. Custom Scent Handler
+    if session.get("custom_mode"):
+        session["custom_mode"] = False
+        user_text = update.message.text or "No text provided"
         
-        # Forward details to admin DM if ADMIN_CHAT_ID is set
         if ADMIN_CHAT_ID:
             try:
                 admin_msg = (
                     f"🧪 *NEW CUSTOM SCENT REQUEST!*\n\n"
                     f"👤 *From:* {sender.first_name} (@{sender.username or 'No Username'})\n"
                     f"🆔 *User ID:* `{user_id}`\n\n"
-                    f"📝 *Details & Description:*\n{user_text}"
+                    f"📝 *Details:*\n{user_text}"
                 )
                 await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_msg, parse_mode="Markdown")
             except Exception as e:
-                logger.error(f"Failed to forward custom scent to admin: {e}")
+                logger.error(f"Admin custom scent forward error: {e}")
         
         keyboard = [[InlineKeyboardButton("👑 Return to Main Menu", callback_data="main_menu")]]
         await update.message.reply_text(
-            "✅ *Custom Scent Request Submitted!*\n\n"
-            "Your description and contact details have been sent directly to our lead curator DM. "
-            "We will review your formulation and get back to you shortly!",
+            "✅ *Custom Scent Request Submitted!*\n\nSent directly to our admin team. We will review and contact you shortly!",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
-    else:
-        # Default message/receipt forwarding
+        return
+
+    # 2. Checkout Receipt Upload Handler
+    if session.get("checkout_mode"):
+        session["checkout_mode"] = False
+        cart = session.get("cart", [])
+        total = sum(item["price"] for item in cart)
+        
+        items_summary = "\n".join([f"• {item['name']} - ₦{item['price']:,}" for item in cart]) if cart else "Custom Cart Items"
+        
         if ADMIN_CHAT_ID:
             try:
+                order_summary = (
+                    f"🚨 *NEW ORDER & PAYMENT SUBMISSION!*\n\n"
+                    f"👤 *Customer:* {sender.first_name} (@{sender.username or 'No Username'})\n"
+                    f"🆔 *User ID:* `{user_id}`\n\n"
+                    f"🛒 *Items Ordered:*\n{items_summary}\n\n"
+                    f"💰 *Total Amount:* ₦{total:,}\n\n"
+                    f"👇 *Attached Payment Receipt / Details Below:*"
+                )
+                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=order_summary, parse_mode="Markdown")
+                # Forward the user's receipt image / message directly to admin
                 await context.bot.forward_message(
                     chat_id=ADMIN_CHAT_ID,
                     from_chat_id=update.effective_chat.id,
                     message_id=update.message.message_id
                 )
-                await update.message.reply_text("📥 *Message/Receipt received!* Our admin team will verify your details shortly.", parse_mode="Markdown")
             except Exception as e:
-                logger.error(f"Forward error: {e}")
-        else:
-            await update.message.reply_text("Tap /start to open the BABY BOY main menu.")
+                logger.error(f"Admin order forward error: {e}")
+        
+        # Clear cart after successful checkout submission
+        session["cart"] = []
+        
+        keyboard = [[InlineKeyboardButton("👑 Return to Main Menu", callback_data="main_menu")]]
+        await update.message.reply_text(
+            "✅ *Order & Receipt Submitted Successfully!*\n\n"
+            "Your payment receipt and order details have been forwarded to our admin for verification. "
+            "We will reach out to you once confirmed!",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+        return
+
+    # Default fallback forwarding
+    if ADMIN_CHAT_ID:
+        try:
+            await context.bot.forward_message(
+                chat_id=ADMIN_CHAT_ID,
+                from_chat_id=update.effective_chat.id,
+                message_id=update.message.message_id
+            )
+            await update.message.reply_text("📥 *Message received!* Our admin team will review it shortly.", parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Forward error: {e}")
+    else:
+        await update.message.reply_text("Tap /start to open the BABY BOY main menu.")
 
 # --- FASTAPI SERVER ---
 app = FastAPI()
@@ -255,7 +293,7 @@ if __name__ == "__main__":
         application = Application.builder().token(token).build()
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CallbackQueryHandler(button_handler))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
         
         logger.info("Telegram Bot is polling on main thread...")
         application.run_polling(drop_pending_updates=True)
